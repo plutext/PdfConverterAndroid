@@ -5,12 +5,15 @@ android {
     buildToolsVersion "26.0.0"
     defaultConfig {
         applicationId "com.plutext.pdfconverterandroidclient"
-        minSdkVersion 15
+        minSdkVersion 19 // DocumentProvider
         targetSdkVersion 26
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
+
     }
+//    useLibrary 'org.apache.http.legacy'
+
     buildTypes {
         release {
             minifyEnabled false
@@ -19,15 +22,30 @@ android {
     }
 }
 
+// Android 6.0 release removes support for the Apache HTTP client.
+// If your app is using this client and targets Android 2.3 (API level 9) or higher,
+// use the HttpURLConnection class instead.
+// But the Java client uses HttpCore 4.4.4, Client 4.5.2
+// Is Client 4.5.x available?
+// https://hc.apache.org/httpcomponents-client-4.5.x/android-port.html
+// recommends https://github.com/smarek/httpclient-android/
+// but that is for v4.4, not 4.5,
+// and org.apache.http.HttpEntity and org.apache.http.entity.* are missing.
+// So, we use HttpURLConnection
+
+repositories {
+    mavenCentral()
+}
+
 dependencies {
     compile fileTree(include: ['*.jar'], dir: 'libs')
-    androidTestCompile('com.android.support.test.espresso:espresso-core:2.2.2', {
-        exclude group: 'com.android.support', module: 'support-annotations'
-    })
     compile 'com.android.support:appcompat-v7:26.+'
     compile 'com.android.support.constraint:constraint-layout:1.0.2'
-    testCompile 'junit:junit:4.12'
-    compile files('libs/PdfConverter-client-1.0.1-SNAPSHOT-shaded.jar')
+
+    compile 'com.google.guava:guava:22.0-android'
+
+    // for logging
+//    compile files('libs/slf4j-android-1.6.1-RC1.jar')
 
     // To view the resulting PDF; otherwise not required
     provided 'org.androidannotations:androidannotations:4.0.0'

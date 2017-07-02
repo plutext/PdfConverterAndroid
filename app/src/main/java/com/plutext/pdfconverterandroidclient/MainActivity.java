@@ -18,13 +18,19 @@
  */
 package com.plutext.pdfconverterandroidclient;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.os.StrictMode;
 import android.support.v7.app.AppCompatActivity;
-import android.os.Bundle;
 
-import org.docx4j.services.client.Converter;
-import org.docx4j.services.client.ConverterHttp;
-import org.docx4j.services.client.Format;
+import com.github.barteksc.pdfviewer.listener.OnErrorListener;
+import com.ipaulpro.afilechooser.utils.FileUtils;
+import com.plutext.services.client.android.ConversionException;
+import com.plutext.services.client.android.Converter;
+import com.plutext.services.client.android.ConverterHttp;
+import com.plutext.services.client.android.Format;
 
 import java.io.ByteArrayOutputStream;
 
@@ -38,15 +44,15 @@ import android.provider.OpenableColumns;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
-import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
+import android.view.View;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.github.barteksc.pdfviewer.PDFView;
 import com.github.barteksc.pdfviewer.listener.OnLoadCompleteListener;
 import com.github.barteksc.pdfviewer.listener.OnPageChangeListener;
 import com.github.barteksc.pdfviewer.scroll.DefaultScrollHandle;
-import com.shockwave.pdfium.PdfDocument;
 
 import org.androidannotations.annotations.AfterViews;
 import org.androidannotations.annotations.EActivity;
@@ -56,11 +62,16 @@ import org.androidannotations.annotations.OptionsItem;
 import org.androidannotations.annotations.OptionsMenu;
 import org.androidannotations.annotations.ViewById;
 
-import java.util.List;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 
 @EActivity(R.layout.activity_main)
 @OptionsMenu(R.menu.options)
-public class MainActivity extends AppCompatActivity implements OnPageChangeListener, OnLoadCompleteListener {
+public class MainActivity extends AppCompatActivity implements OnPageChangeListener, OnLoadCompleteListener, OnErrorListener {
 
     // Configure this property to point to your own Converter instance.
     private static final String URL = "http://converter-eval.plutext.com:80/v1/00000000-0000-0000-0000-000000000000/convert";
@@ -92,13 +103,15 @@ public class MainActivity extends AppCompatActivity implements OnPageChangeListe
     @ViewById
     PDFView pdfView;
 
+    View progressOverlay;
+
     @NonConfigurationInstance
     Uri uri;
 
     @NonConfigurationInstance
     Integer pageNumber = 0;
 
-    String pdfFileName;
+    String fileName;
 
     @OptionsItem(R.id.pickFile)
     void pickFile() {
@@ -120,7 +133,8 @@ public class MainActivity extends AppCompatActivity implements OnPageChangeListe
 
     void launchPicker() {
         Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
-        intent.setType("application/pdf");
+        //intent.setType("application/pdf");
+        intent.setType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
         try {
             startActivityForResult(intent, REQUEST_CODE);
         } catch (ActivityNotFoundException e) {
@@ -131,17 +145,17 @@ public class MainActivity extends AppCompatActivity implements OnPageChangeListe
 
     @AfterViews
     void afterViews() {
-        pdfView.setBackgroundColor(Color.LTGRAY);
+        //pdfView.setBackgroundColor(Color.LTGRAY);
         if (uri != null) {
             displayFromUri(uri);
         } else {
             displayFromAsset(SAMPLE_FILE);
         }
-        setTitle(pdfFileName);
+        setTitle(fileName);
     }
 
     private void displayFromAsset(String assetFileName) {
-        pdfFileName = assetFileName;
+        fileName = assetFileName;
 
         if (assetFileName.toLowerCase().endsWith("pdf")) {
 
@@ -153,64 +167,197 @@ public class MainActivity extends AppCompatActivity implements OnPageChangeListe
                     .scrollHandle(new DefaultScrollHandle(this))
                     .spacing(10) // in dp
                     .load();
+
         } else if (assetFileName.toLowerCase().endsWith("doc")
                 || assetFileName.toLowerCase().endsWith("docx")) {
 
             // Convert it
             ClassLoader loader = MainActivity.class.getClassLoader();
 
-            java.net.URL url = loader.getResource("assets/sample-docxv2.docx");
+            java.net.URL url = loader.getResource("assets/" + SAMPLE_FILE);
             if (url==null) {
-                System.out.println("no file");
+                displayError(null, "no file");
                 return;
             }
 
             try {
                 java.io.InputStream is = url.openConnection().getInputStream();
-
-                // Convert it
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-
-                Converter converter = new ConverterHttp(URL);
-                converter.convert(is, Format.DOCX, Format.PDF, baos);
-
-
-
-    //            converter.convert(baos.toByteArray(), Format.DOCX, Format.PDF, outputStream);
-
-                byte[] bytes = baos.toByteArray();
-                System.out.println("got " + bytes.length);
-
-    //            baos.close();
-
-                // Display the result
-                pdfView.fromBytes(bytes)
-                        .defaultPage(pageNumber)
-                        .onPageChange(this)
-                        .enableAnnotationRendering(true)
-                        .onLoad(this)
-                        .scrollHandle(new DefaultScrollHandle(this))
-                        .spacing(10) // in dp
-                        .load();
+                viewWordDocumentAsPDF(is);
 
             } catch (Exception e) {
                 e.printStackTrace();
-//            throw new Exception("Problem converting to PDF; check URL " + URL + "\n" + e.getMessage(), e);
+                displayError(e, null);
             }
         }
     }
 
     private void displayFromUri(Uri uri) {
-        pdfFileName = getFileName(uri);
+        fileName = getFileName(uri);
 
-        pdfView.fromUri(uri)
+        if (fileName.toLowerCase().endsWith("pdf")) {
+
+            pdfView.fromUri(uri)
+                    .defaultPage(pageNumber)
+                    .onPageChange(this)
+                    .enableAnnotationRendering(true)
+                    .onLoad(this)
+                    .scrollHandle(new DefaultScrollHandle(this))
+                    .spacing(10) // in dp
+                    .load();
+
+        } else if (fileName.toLowerCase().endsWith("doc")
+                || fileName.toLowerCase().endsWith("docx")) {
+
+            try {
+
+                File file = FileUtils.getFile(this, uri);
+                viewWordDocumentAsPDF(file);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                displayError(e, null);
+            }
+        }
+    }
+
+    byte[] bytes;
+
+    private void viewWordDocumentAsPDF(Object input) throws IOException, ConversionException {
+
+        Toast.makeText(this, "uploading", Toast.LENGTH_SHORT).show();
+
+        progressOverlay = findViewById(R.id.progress_overlay);
+        progressOverlay.forceLayout();
+        progressOverlay.setVisibility(View.VISIBLE);
+        progressOverlay.bringToFront();
+        if (progressOverlay==null) {
+            System.out.println("progressOverlay null");
+        } else if (!progressOverlay.isShown()) {
+            System.out.println("progressOverlay not shown");
+        }
+        TextView tvName = (TextView)findViewById(R.id.hName);
+        tvName.setText("uploading..");
+        setTitle("uploading..");
+        animateView(progressOverlay, View.VISIBLE, 0.4f, 200);
+        if (progressOverlay==null) {
+            System.out.println("progressOverlay null");
+        } else if (!progressOverlay.isShown()) {
+            System.out.println("progressOverlay not shown");
+        }
+
+        // Convert it
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+
+        try {
+            Converter converter = new ConverterHttp(URL);
+            if (input instanceof java.io.InputStream) {
+                // API using InputStream
+                converter.convert((InputStream) input, Format.DOCX, Format.PDF, baos);
+            } else if (input instanceof File) {
+                // API using File
+                converter.convert((File) input, Format.DOCX, Format.PDF, baos);
+            }
+        } catch (ConversionException ce) {
+
+            if (bytes.toString().length()>80) {
+                displayError(ce, "Error in conversion process \n\r"
+                        + baos.toString().substring(0, 80)
+                        + "\n\r");
+            } else {
+                displayError(ce, "Error in conversion process \n\r"
+                        + baos.toString()
+                        + "\n\r");
+            }
+            return;
+
+            // overtlay shows here!!
+        }
+
+        bytes = baos.toByteArray();
+        tvName.setText("converted .. " + bytes.length + " bytes; now view it...");
+        setTitle("converted .. " + bytes.length + " bytes; now view it...");
+        Toast.makeText(this, "converted .. " + bytes.length + " bytes; now view it...",
+                Toast.LENGTH_SHORT).show();
+
+        // Display the result
+        pdfView.fromBytes(bytes)
                 .defaultPage(pageNumber)
                 .onPageChange(this)
                 .enableAnnotationRendering(true)
                 .onLoad(this)
+                .onError(this)
                 .scrollHandle(new DefaultScrollHandle(this))
                 .spacing(10) // in dp
                 .load();
+
+        animateView(progressOverlay, View.GONE, 0, 200);
+
+    }
+
+    public void onError(Throwable t) {
+
+        if (bytes.toString().length()>80) {
+            displayError(t, "Error viewing converter output \n\r"
+                    + bytes.toString().substring(0, 80)
+                    + "\n\r");
+        } else {
+            displayError(t, "Error viewing converter output \n\r"
+                    + bytes.toString()
+                    + "\n\r");
+        }
+    }
+
+    private void displayError(Throwable t, String commentary) {
+
+        final StringWriter sw = new StringWriter();
+        final PrintWriter pw = new PrintWriter(sw);
+        if (commentary!=null) pw.append(commentary  + "\n\r");
+        if (t!=null && t.getCause()!=null) {
+            pw.append(t.getCause().getMessage() + "\n\r");
+            t.getCause().printStackTrace(pw);
+        } else if (t!=null) {
+            pw.append(t.getMessage() + "\n\r");
+            t.printStackTrace(pw);
+        }
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setMessage(sw.toString())
+                .setCancelable(false)
+                .setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int id) {
+                        //do things
+                    }
+                });
+        AlertDialog alert = builder.create();
+        alert.show();
+    }
+
+    /**
+     * @param view         View to animate
+     * @param toVisibility Visibility at the end of animation
+     * @param toAlpha      Alpha at the end of animation
+     * @param duration     Animation duration in ms
+     */
+    public static void animateView(final View view, final int toVisibility, float toAlpha, int duration) {
+
+        // from https://stackoverflow.com/questions/18021148/display-a-loading-overlay-on-android-screen
+
+        boolean show = toVisibility == View.VISIBLE;
+        if (show) {
+            view.setAlpha(0);
+        }
+        view.setVisibility(View.VISIBLE);
+        view.bringToFront();
+        view.animate()
+                .setDuration(duration)
+                .alpha(show ? toAlpha : 0)
+                .setListener(new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        view.setVisibility(toVisibility);
+                    }
+                });
+
     }
 
     @OnActivityResult(REQUEST_CODE)
@@ -224,7 +371,7 @@ public class MainActivity extends AppCompatActivity implements OnPageChangeListe
     @Override
     public void onPageChanged(int page, int pageCount) {
         pageNumber = page;
-        setTitle(String.format("%s %s / %s", pdfFileName, page + 1, pageCount));
+        setTitle(String.format("%s %s / %s", fileName, page + 1, pageCount));
     }
 
     public String getFileName(Uri uri) {
@@ -249,30 +396,22 @@ public class MainActivity extends AppCompatActivity implements OnPageChangeListe
 
     @Override
     public void loadComplete(int nbPages) {
-        PdfDocument.Meta meta = pdfView.getDocumentMeta();
-        Log.e(TAG, "title = " + meta.getTitle());
-        Log.e(TAG, "author = " + meta.getAuthor());
-        Log.e(TAG, "subject = " + meta.getSubject());
-        Log.e(TAG, "keywords = " + meta.getKeywords());
-        Log.e(TAG, "creator = " + meta.getCreator());
-        Log.e(TAG, "producer = " + meta.getProducer());
-        Log.e(TAG, "creationDate = " + meta.getCreationDate());
-        Log.e(TAG, "modDate = " + meta.getModDate());
 
-        printBookmarksTree(pdfView.getTableOfContents(), "-");
+        Log.e(TAG, "got PDF; page count= " + nbPages);
+//        printBookmarksTree(pdfView.getTableOfContents(), "-");
 
     }
 
-    public void printBookmarksTree(List<PdfDocument.Bookmark> tree, String sep) {
-        for (PdfDocument.Bookmark b : tree) {
-
-            Log.e(TAG, String.format("%s %s, p %d", sep, b.getTitle(), b.getPageIdx()));
-
-            if (b.hasChildren()) {
-                printBookmarksTree(b.getChildren(), sep + "-");
-            }
-        }
-    }
+//    public void printBookmarksTree(List<PdfDocument.Bookmark> tree, String sep) {
+//        for (PdfDocument.Bookmark b : tree) {
+//
+//            Log.e(TAG, String.format("%s %s, p %d", sep, b.getTitle(), b.getPageIdx()));
+//
+//            if (b.hasChildren()) {
+//                printBookmarksTree(b.getChildren(), sep + "-");
+//            }
+//        }
+//    }
 
     /**
      * Listener for response to user permission request
